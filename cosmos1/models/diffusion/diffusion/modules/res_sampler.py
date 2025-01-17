@@ -195,19 +195,6 @@ class Sampler(torch.nn.Module):
         return denoised_output, intermediate_outputs
 
 
-def move_to_cpu(x: Any) -> Any:
-    if isinstance(x, torch.Tensor):
-        return x.cpu().detach()
-    elif isinstance(x, dict):
-        return {key: move_to_cpu(value) for key, value in x.items()}
-    elif isinstance(x, list):
-        return [move_to_cpu(item) for item in x]
-    elif isinstance(x, tuple):
-        return tuple(move_to_cpu(item) for item in x)
-    else:
-        return x
-
-
 def fori_loop(lower: int, upper: int, body_fun: Callable[[int, Any], Any], init_val: Any) -> Any:
     """
     Implements a for loop with a function.
@@ -223,7 +210,7 @@ def fori_loop(lower: int, upper: int, body_fun: Callable[[int, Any], Any], init_
         Intermediate results after each iteration.
     """
     val = init_val
-    vals = [move_to_cpu(init_val)]
+    vals = [init_val]
     for i in tqdm(range(lower, upper), desc="Denoising video..."):
         val = body_fun(i, val)
         vals.append(val)
