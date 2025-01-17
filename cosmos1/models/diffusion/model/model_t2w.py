@@ -274,8 +274,8 @@ class DiffusionT2WModel(torch.nn.Module):
                 * sigma_max
             )
 
-        samples = self.sampler(
+        samples, intermediate_samples = self.sampler(
             x0_fn, x_sigma_max, num_steps=num_steps, sigma_max=sigma_max, solver_option=solver_option
         )
 
-        return samples
+        return samples, intermediate_samples

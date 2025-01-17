@@ -428,7 +428,7 @@ def generate_world_from_text(
     )
 
     # Generate video
-    sample = model.generate_samples_from_batch(
+    sample, intermediate_samples = model.generate_samples_from_batch(
         data_batch,
         guidance=guidance,
         state_shape=state_shape,
@@ -438,7 +438,7 @@ def generate_world_from_text(
         x_sigma_max=x_sigma_max,
     )
 
-    return sample
+    return sample, intermediate_samples
 
 
 def generate_world_from_video(

@@ -27,6 +27,7 @@ from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 
 import attrs
 import torch
+from tqdm import tqdm
 
 from cosmos1.models.diffusion.diffusion.functional.multi_step import get_multi_step_fn, is_multi_step_fn_supported
 from cosmos1.models.diffusion.diffusion.functional.runge_kutta import get_runge_kutta_fn, is_runge_kutta_fn_supported
@@ -147,7 +148,8 @@ class Sampler(torch.nn.Module):
         timestamps_cfg = SolverTimestampConfig(nfe=num_steps, t_min=sigma_min, t_max=sigma_max, order=rho)
         sampler_cfg = SamplerConfig(solver=solver_cfg, timestamps=timestamps_cfg, sample_clean=True)
 
-        return self._forward_impl(float64_x0_fn, x_sigma_max, sampler_cfg).to(in_dtype)
+        final_sample, intermediate_samples = self._forward_impl(float64_x0_fn, x_sigma_max, sampler_cfg)
+        return final_sample.to(in_dtype), [sample.to(in_dtype) for sample in intermediate_samples]
 
     @torch.no_grad()
     def _forward_impl(
@@ -177,7 +179,7 @@ class Sampler(torch.nn.Module):
             sampler_cfg.timestamps.t_min, sampler_cfg.timestamps.t_max, num_timestamps, sampler_cfg.timestamps.order
         ).to(noisy_input_B_StateShape.device)
 
-        denoised_output = differential_equation_solver(
+        denoised_output, intermediate_outputs = differential_equation_solver(
             denoiser_fn, sigmas_L, sampler_cfg.solver, callback_fns=callback_fns
         )(noisy_input_B_StateShape)
 
@@ -186,7 +188,24 @@ class Sampler(torch.nn.Module):
             ones = torch.ones(denoised_output.size(0), device=denoised_output.device, dtype=denoised_output.dtype)
             denoised_output = denoiser_fn(denoised_output, sigmas_L[-1] * ones)
 
-        return denoised_output
+            intermediate_outputs = [denoiser_fn(intermediate_output, sigmas_L[-1] * ones) for intermediate_output, _ in tqdm(intermediate_outputs,
+             desc="Finalizing denoising...")]
+
+
+        return denoised_output, intermediate_outputs
+
+
+def move_to_cpu(x: Any) -> Any:
+    if isinstance(x, torch.Tensor):
+        return x.cpu().detach()
+    elif isinstance(x, dict):
+        return {key: move_to_cpu(value) for key, value in x.items()}
+    elif isinstance(x, list):
+        return [move_to_cpu(item) for item in x]
+    elif isinstance(x, tuple):
+        return tuple(move_to_cpu(item) for item in x)
+    else:
+        return x
 
 
 def fori_loop(lower: int, upper: int, body_fun: Callable[[int, Any], Any], init_val: Any) -> Any:
@@ -201,11 +220,14 @@ def fori_loop(lower: int, upper: int, body_fun: Callable[[int, Any], Any], init_
 
     Returns:
         The final result after all iterations.
+        Intermediate results after each iteration.
     """
     val = init_val
-    for i in range(lower, upper):
+    vals = [move_to_cpu(init_val)]
+    for i in tqdm(range(lower, upper), desc="Denoising video..."):
         val = body_fun(i, val)
-    return val
+        vals.append(val)
+    return val, vals
 
 
 def differential_equation_solver(
@@ -277,7 +299,7 @@ def differential_equation_solver(
 
             return output_x_B_StateShape, x0_preds
 
-        x_at_eps, _ = fori_loop(0, num_step, step_fn, [input_xT_B_StateShape, None])
-        return x_at_eps
+        (x_at_eps, _), xs_at_eps = fori_loop(0, num_step, step_fn, [input_xT_B_StateShape, None])
+        return x_at_eps, xs_at_eps
 
     return sample_fn
