@@ -399,6 +399,7 @@ def generate_world_from_text(
     guidance: float,
     num_steps: int,
     seed: int,
+    return_every_nth: int = 0,
 ):
     """Generate video from text prompt using diffusion model.
 
@@ -410,9 +411,11 @@ def generate_world_from_text(
         guidance (float): Classifier-free guidance scale
         num_steps (int): Number of diffusion sampling steps
         seed (int): Random seed for reproducibility
+        return_every_nth (int): Set a positive non-zero value to return every nth intermediate generation. Defaults to 0.
 
     Returns:
         np.ndarray: Generated video frames [T,H,W,C], range [0,255]
+        List[np.ndarray] | None: Intermediate video frames [T,H,W,C], range [0,255] or None if return_every_nth is 0
 
     The function:
     1. Initializes random latent with maximum noise
@@ -430,7 +433,7 @@ def generate_world_from_text(
     )
 
     # Generate video
-    sample = model.generate_samples_from_batch(
+    sample, intermediate_samples = model.generate_samples_from_batch(
         data_batch,
         guidance=guidance,
         state_shape=state_shape,
@@ -438,9 +441,10 @@ def generate_world_from_text(
         is_negative_prompt=is_negative_prompt,
         seed=seed,
         x_sigma_max=x_sigma_max,
+        return_every_nth=return_every_nth
     )
 
-    return sample
+    return sample, intermediate_samples
 
 
 def generate_world_from_video(

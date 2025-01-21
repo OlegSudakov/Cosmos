@@ -27,6 +27,7 @@ from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 
 import attrs
 import torch
+from tqdm import tqdm
 
 from cosmos1.models.diffusion.diffusion.functional.multi_step import get_multi_step_fn, is_multi_step_fn_supported
 from cosmos1.models.diffusion.diffusion.functional.runge_kutta import get_runge_kutta_fn, is_runge_kutta_fn_supported
@@ -125,6 +126,7 @@ class Sampler(torch.nn.Module):
         S_max: float = float("inf"),
         S_noise: float = 1,
         solver_option: str = "2ab",
+        return_every_nth: int = 0,
     ) -> torch.Tensor:
         in_dtype = x_sigma_max.dtype
 
@@ -147,7 +149,9 @@ class Sampler(torch.nn.Module):
         timestamps_cfg = SolverTimestampConfig(nfe=num_steps, t_min=sigma_min, t_max=sigma_max, order=rho)
         sampler_cfg = SamplerConfig(solver=solver_cfg, timestamps=timestamps_cfg, sample_clean=True)
 
-        return self._forward_impl(float64_x0_fn, x_sigma_max, sampler_cfg).to(in_dtype)
+        final_sample, intermediate_samples = self._forward_impl(float64_x0_fn, x_sigma_max, sampler_cfg,
+                                                                return_every_nth=return_every_nth)
+        return final_sample.to(in_dtype), [sample.to(in_dtype) for sample in intermediate_samples]
 
     @torch.no_grad()
     def _forward_impl(
@@ -156,6 +160,7 @@ class Sampler(torch.nn.Module):
         noisy_input_B_StateShape: torch.Tensor,
         sampler_cfg: Optional[SamplerConfig] = None,
         callback_fns: Optional[List[Callable]] = None,
+        return_every_nth: int = 0,
     ) -> torch.Tensor:
         """
         Internal implementation of the forward pass.
@@ -165,9 +170,11 @@ class Sampler(torch.nn.Module):
             noisy_input_B_StateShape: Input tensor with noise.
             sampler_cfg: Configuration for the sampler.
             callback_fns: List of callback functions to be called during sampling.
+            return_every_nth (int): Set a positive non-zero value to return every nth intermediate generation. Defaults to 0.
 
         Returns:
             torch.Tensor: Denoised output tensor.
+            List[torch.Tensor] | None: List of intermediate denoised tensors.
         """
         sampler_cfg = self.cfg if sampler_cfg is None else sampler_cfg
         solver_order = 1 if sampler_cfg.solver.is_multi else int(sampler_cfg.solver.rk[0])
@@ -177,19 +184,22 @@ class Sampler(torch.nn.Module):
             sampler_cfg.timestamps.t_min, sampler_cfg.timestamps.t_max, num_timestamps, sampler_cfg.timestamps.order
         ).to(noisy_input_B_StateShape.device)
 
-        denoised_output = differential_equation_solver(
-            denoiser_fn, sigmas_L, sampler_cfg.solver, callback_fns=callback_fns
+        denoised_output, intermediate_outputs = differential_equation_solver(
+            denoiser_fn, sigmas_L, sampler_cfg.solver, callback_fns=callback_fns, return_every_nth=return_every_nth
         )(noisy_input_B_StateShape)
 
         if sampler_cfg.sample_clean:
             # Override denoised_output with fully denoised version
             ones = torch.ones(denoised_output.size(0), device=denoised_output.device, dtype=denoised_output.dtype)
             denoised_output = denoiser_fn(denoised_output, sigmas_L[-1] * ones)
+            intermediate_outputs = [denoiser_fn(intermediate_output, sigmas_L[-1] * ones) for intermediate_output, _ in tqdm(intermediate_outputs,
+             desc="Finalizing denoising...")]
 
-        return denoised_output
+
+        return denoised_output, intermediate_outputs
 
 
-def fori_loop(lower: int, upper: int, body_fun: Callable[[int, Any], Any], init_val: Any) -> Any:
+def fori_loop(lower: int, upper: int, body_fun: Callable[[int, Any], Any], init_val: Any, return_every_nth: int = 0) -> Any:
     """
     Implements a for loop with a function.
 
@@ -198,14 +208,19 @@ def fori_loop(lower: int, upper: int, body_fun: Callable[[int, Any], Any], init_
         upper: Upper bound of the loop (exclusive).
         body_fun: Function to be applied in each iteration.
         init_val: Initial value for the loop.
+        return_every_nth: Set a positive non-zero value to return every nth intermediate generation. Defaults to 0.
 
     Returns:
         The final result after all iterations.
+        Intermediate results after each iteration.
     """
     val = init_val
-    for i in range(lower, upper):
+    vals = [init_val] if return_every_nth > 0 else []
+    for i in tqdm(range(lower, upper), desc="Denoising video..."):
         val = body_fun(i, val)
-    return val
+        if return_every_nth and i % return_every_nth == 0:
+            vals.append(val)
+    return val, vals
 
 
 def differential_equation_solver(
@@ -213,6 +228,7 @@ def differential_equation_solver(
     sigmas_L: torch.Tensor,
     solver_cfg: SolverConfig,
     callback_fns: Optional[List[Callable]] = None,
+    return_every_nth: int = 0,
 ) -> Callable[[torch.Tensor], torch.Tensor]:
     """
     Creates a differential equation solver function.
@@ -222,6 +238,7 @@ def differential_equation_solver(
         sigmas_L: Tensor of sigma values with shape [L,].
         solver_cfg: Configuration for the solver.
         callback_fns: Optional list of callback functions.
+        return_every_nth (int): Set a positive non-zero value to return every nth intermediate generation. Defaults to 0.
 
     Returns:
         A function that solves the differential equation.
@@ -277,7 +294,7 @@ def differential_equation_solver(
 
             return output_x_B_StateShape, x0_preds
 
-        x_at_eps, _ = fori_loop(0, num_step, step_fn, [input_xT_B_StateShape, None])
-        return x_at_eps
+        (x_at_eps, _), xs_at_eps = fori_loop(0, num_step, step_fn, [input_xT_B_StateShape, None], return_every_nth=return_every_nth)
+        return x_at_eps, xs_at_eps
 
     return sample_fn

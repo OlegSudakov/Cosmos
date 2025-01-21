@@ -237,6 +237,7 @@ class DiffusionT2WModel(torch.nn.Module):
         solver_option: COMMON_SOLVER_OPTIONS = "2ab",
         x_sigma_max: Optional[torch.Tensor] = None,
         sigma_max: float | None = None,
+        return_every_nth: int = 0,
     ) -> Tensor:
         """Generate samples from a data batch using diffusion sampling.
 
@@ -254,6 +255,7 @@ class DiffusionT2WModel(torch.nn.Module):
             solver_option (COMMON_SOLVER_OPTIONS, optional): Differential equation solver option. Defaults to "2ab" (multistep solver).
             x_sigma_max (Optional[torch.Tensor], optional): Initial noisy tensor. If None, randomly initialized. Defaults to None.
             sigma_max (float | None, optional): Maximum noise level. Uses self.sde.sigma_max if None. Defaults to None.
+            return_every_nth (int): Set a positive non-zero value to return every nth intermediate generation. Defaults to 0.
 
         Returns:
             Tensor: Generated samples after diffusion sampling
@@ -274,8 +276,9 @@ class DiffusionT2WModel(torch.nn.Module):
                 * sigma_max
             )
 
-        samples = self.sampler(
-            x0_fn, x_sigma_max, num_steps=num_steps, sigma_max=sigma_max, solver_option=solver_option
+        samples, intermediate_samples = self.sampler(
+            x0_fn, x_sigma_max, num_steps=num_steps, sigma_max=sigma_max, solver_option=solver_option,
+                return_every_nth=return_every_nth
         )
 
-        return samples
+        return samples, intermediate_samples
