@@ -555,7 +555,7 @@ class DiffusionVideo2WorldGenerationPipeline(DiffusionText2WorldGenerationPipeli
         if self.offload_network:
             self._load_network()
 
-        sample = self._run_model(prompt_embedding, condition_latent, negative_prompt_embedding)
+        sample, intermediate_samples = self._run_model(prompt_embedding, condition_latent, negative_prompt_embedding)
 
         if self.offload_network:
             self._offload_network()
